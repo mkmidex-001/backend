@@ -7,6 +7,7 @@ import { createMediaService } from '../../domains/media/media.service';
 import { NoScanScanner } from '../../domains/media/media.scanner';
 import { buildProcessor, buildStorage } from '../../domains/media/media.factory';
 import type { PrismaClient } from '@prisma/client';
+import { withWorkerContext, runWithJobContext } from './middleware';
 
 /**
  * Turns a verified upload into its renditions (#64).
@@ -27,7 +28,7 @@ async function processMediaJob(job: Job, prisma: PrismaClient): Promise<unknown>
     // Scanning already happened on the upload path; the worker only derives.
     NoScanScanner,
     buildProcessor(),
-    { cdnBaseUrl: config.MEDIA_CDN_BASE_URL }
+    { cdnBaseUrl: (config as any).MEDIA_CDN_BASE_URL }
   );
 
   await job.updateProgress(25);
@@ -55,7 +56,7 @@ let fallbackPrisma: PrismaClient | null = null;
 export function createImageProcessingWorker(prisma?: PrismaClient) {
   const worker = new Worker(
     QUEUE_NAMES.imageProcessing,
-    async (job: Job) => {
+    withWorkerContext(async (job: Job) => {
       // Media jobs are recognised by name so the pre-existing image pipeline and
       // the media pipeline can share one queue without stepping on each other.
       if (job.name === MEDIA_PROCESSING_JOB) {
@@ -66,7 +67,7 @@ export function createImageProcessingWorker(prisma?: PrismaClient) {
       logger.info({ assetUrl: job.data.assetUrl, ops: job.data.operations }, 'processing image');
       await job.updateProgress(100);
       return { processed: true, assetUrl: job.data.assetUrl };
-    },
+    }),
     {
       connection: bullConnection,
       concurrency: config.WORKER_CONCURRENCY,
@@ -75,8 +76,12 @@ export function createImageProcessingWorker(prisma?: PrismaClient) {
   );
 
   worker.on('failed', async (job, err) => {
-    if (job && job.attemptsMade >= (job.opts.attempts ?? 5)) {
-      await moveToDeadLetter(QUEUE_NAMES.imageProcessing, String(job.id), job.data, err.message);
+    if (job) {
+      await runWithJobContext(job, async () => {
+        if (job.attemptsMade >= (job.opts.attempts ?? 5)) {
+          await moveToDeadLetter(QUEUE_NAMES.imageProcessing, String(job.id), job.data, err.message);
+        }
+      });
     }
   });
 

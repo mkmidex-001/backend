@@ -210,6 +210,8 @@ See `src/lib/circuit-breaker/` (issue #22).
 | `CORS_ORIGINS`     | string | —       | `*` or comma separated origins                    | no     | ✅         | Browser origin allowlist (see `getCorsOrigins`)                             |
 | `CORS_CREDENTIALS` | bool   | `true`  | —                                                 | no     | ✅         | `Access-Control-Allow-Credentials`                                          |
 | `CORS_MAX_AGE`     | int    | `600`   | 0–86400                                           | no     | ✅         | Preflight cache (seconds)                                                   |
+| `REQUEST_TIMEOUT_MS` | int  | `30000` | 100–300000                                        | no     | ✅         | A request still running past this returns 504 (issue #206)                 |
+| `AUTH_REQUEST_TIMEOUT_MS` | int | `5000` | 100–60000                                    | no     | ✅         | Tighter timeout for `/api/v1/auth/*` routes (issue #206)                    |
 
 ## Rate limiting
 
@@ -226,6 +228,10 @@ Policies and route classification live in `src/config/rate-limit.ts`
 | `RATE_LIMIT_AUTHENTICATED_WINDOW_MS` | int  | `60000`  | 1000–3600000     | no     | ✅         | Authenticated route window                                         |
 | `RATE_LIMIT_SENSITIVE_MAX`           | int  | `10`     | 1–1000           | no     | ✅         | Max requests per sensitive route (login, tips, payouts) per window |
 | `RATE_LIMIT_SENSITIVE_WINDOW_MS`     | int  | `60000`  | 1000–3600000     | no     | ✅         | Sensitive route window                                             |
+| `RATE_LIMIT_WALLET_NONCE_MAX`        | int  | `5`      | 1–1000           | no     | ✅         | Max wallet challenge (nonce) requests per user per window          |
+| `RATE_LIMIT_WALLET_NONCE_WINDOW_MS`  | int  | `3600000`| 1000–3600000     | no     | ✅         | Wallet nonce rate-limit window (default 1 hour)                    |
+| `RATE_LIMIT_WALLET_VERIFY_MAX`       | int  | `10`     | 1–1000           | no     | ✅         | Max wallet verify requests per user per window                     |
+| `RATE_LIMIT_WALLET_VERIFY_WINDOW_MS` | int  | `3600000`| 1000–3600000     | no     | ✅         | Wallet verify rate-limit window (default 1 hour)                   |
 | `RATE_LIMIT_INTERNAL_MAX`            | int  | `1000`   | 1–1000000        | no     | ✅         | Internal service route limit per service/key bucket                |
 | `RATE_LIMIT_INTERNAL_WINDOW_MS`      | int  | `60000`  | 1000–3600000     | no     | ✅         | Internal service route window                                      |
 

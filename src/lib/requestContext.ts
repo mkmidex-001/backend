@@ -14,6 +14,7 @@
  */
 
 import { AsyncLocalStorage } from 'async_hooks';
+import { randomUUID } from 'node:crypto';
 
 export const REQUEST_ID_HEADER = 'X-Request-ID';
 const REQUEST_ID_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
@@ -21,6 +22,20 @@ const REQUEST_ID_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
 export interface RequestContext {
   requestId: string;
   userId?: string;
+  timestamp?: number;
+}
+
+export interface TraceContext {
+  requestId: string;
+  userId?: string;
+  timestamp?: number;
+}
+
+export interface JobTracePayload {
+  requestId: string;
+  userId?: string;
+  timestamp: number;
+  traceContext: TraceContext;
 }
 
 const storage = new AsyncLocalStorage<RequestContext>();
@@ -91,3 +106,94 @@ export function setRequestContextUserId(userId: string): void {
     context.userId = userId;
   }
 }
+
+/** Read the active trace context. */
+export function getTraceContext(): TraceContext | undefined {
+  const context = storage.getStore();
+  if (!context) return undefined;
+  return {
+    requestId: context.requestId,
+    ...(context.userId ? { userId: context.userId } : {}),
+    timestamp: context.timestamp ?? Date.now(),
+  };
+}
+
+/**
+ * Enriches any BullMQ job data payload with trace context so downstream workers
+ * and event handlers can correlate operations back to the originating request.
+ */
+export function withJobTracePayload<T extends Record<string, unknown>>(
+  payload: T,
+  explicitTrace?: Partial<TraceContext>
+): T & JobTracePayload {
+  const active = getTraceContext();
+  const requestId =
+    sanitizeRequestId(explicitTrace?.requestId) ?? active?.requestId ?? randomUUID();
+  const userId = explicitTrace?.userId ?? active?.userId;
+  const timestamp = explicitTrace?.timestamp ?? active?.timestamp ?? Date.now();
+
+  const traceContext: TraceContext = {
+    requestId,
+    ...(userId ? { userId } : {}),
+    timestamp,
+  };
+
+  return {
+    ...payload,
+    requestId,
+    ...(userId ? { userId } : {}),
+    timestamp,
+    traceContext,
+  };
+}
+
+/**
+ * Extracts a TraceContext from a BullMQ Job or generic payload object.
+ * Checks nested `traceContext`, root-level fields, and falls back to a generated ID
+ * if processing unsourced background/cron jobs.
+ */
+export function extractJobTrace(job: { data?: unknown; id?: string | number; name?: string }): TraceContext {
+  const data = (job && typeof job.data === 'object' && job.data !== null ? job.data : {}) as Record<string, unknown>;
+  const nested = (typeof data.traceContext === 'object' && data.traceContext !== null ? data.traceContext : {}) as Record<string, unknown>;
+
+  const rawRequestId = nested.requestId ?? data.requestId;
+  const resolvedRequestId =
+    sanitizeRequestId(rawRequestId) ?? (job?.id ? `job-${job.name ? `${job.name}-` : ''}${job.id}` : randomUUID());
+
+  const rawUserId = nested.userId ?? data.userId;
+  const userId = typeof rawUserId === 'string' && rawUserId.trim() ? rawUserId.trim() : undefined;
+
+  const rawTimestamp = nested.timestamp ?? data.timestamp;
+  const timestamp =
+    typeof rawTimestamp === 'number' && Number.isFinite(rawTimestamp) ? rawTimestamp : Date.now();
+
+  return {
+    requestId: resolvedRequestId,
+    ...(userId ? { userId } : {}),
+    timestamp,
+  };
+}
+
+/**
+ * Runs a function within the execution context derived from a BullMQ job.
+ */
+export function runWithJobContext<T>(
+  job: { data?: unknown; id?: string | number; name?: string },
+  fn: () => T
+): T {
+  const trace = extractJobTrace(job);
+  return runWithRequestContext(trace, fn);
+}
+
+/**
+ * Worker processor middleware.
+ * Wraps any BullMQ worker processing function so it automatically executes inside
+ * the restored request context. Worker logs, database transactions, and chained jobs
+ * inherit the originating requestId and userId.
+ */
+export function withWorkerContext<TJob extends { data?: unknown; id?: string | number; name?: string }, TResult>(
+  processor: (job: TJob) => Promise<TResult>
+): (job: TJob) => Promise<TResult> {
+  return (job: TJob) => runWithJobContext(job, () => processor(job));
+}
+

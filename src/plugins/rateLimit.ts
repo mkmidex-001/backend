@@ -32,7 +32,7 @@ import { logger } from '../utils/logger';
  * sized by its class.
  */
 
-export type RouteClassification = RateLimitClass | 'authLogin' | 'authRegister' | 'authRecovery' | 'exempt';
+export type RouteClassification = RateLimitClass | 'authLogin' | 'authRegister' | 'authRecovery' | 'walletNonce' | 'walletVerify' | 'exempt';
 
 export interface RateLimitingOptions {
   enabled?: boolean;
@@ -211,13 +211,17 @@ export async function registerRateLimiting(
     }
 
     const routeClass = classifyRoute(routeOptions, policies, rules, exemptions);
-    const authOverride = routeOptions.url === '/api/v1/auth/login'
+    const authOverride: RouteClassification = routeOptions.url === '/api/v1/auth/login'
       ? 'authLogin'
       : routeOptions.url === '/api/v1/auth/register'
         ? 'authRegister'
         : ['/api/v1/auth/password-reset', '/api/v1/auth/password-reset/confirm'].includes(routeOptions.url)
           ? 'authRecovery'
-          : routeClass;
+          : routeOptions.url === '/api/v1/auth/wallet/challenge'
+            ? 'walletNonce'
+            : routeOptions.url === '/api/v1/auth/wallet/verify'
+              ? 'walletVerify'
+              : routeClass;
     routeOptions.config = {
       ...routeOptions.config,
       rateLimit:
@@ -225,7 +229,7 @@ export async function registerRateLimiting(
           ? false
           : routeClass === 'internal'
             ? internalPolicy
-            : routePolicies[routeClass],
+            : routePolicies[authOverride] ?? routePolicies[routeClass],
     };
   });
 

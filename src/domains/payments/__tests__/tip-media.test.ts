@@ -7,9 +7,24 @@
  * asks for too much media is refused before anything is written.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+
+// #175 — stub getWalletBalance so balance checks don't hit the Stellar network
+vi.mock('../../../lib/stellar/wallet', () => ({
+  getWalletBalance: vi.fn(),
+}));
+
+// BullMQ opens a Redis connection on import — keep tests hermetic
+vi.mock('../../../lib/queue', () => ({
+  stellarConfirmationQueue: { add: vi.fn() },
+  webhookDispatchQueue: { add: vi.fn() },
+}));
+
 import { PaymentService } from '../payment.service';
 import { MAX_MEDIA_PER_TIP } from '../../media/media.types';
 import { ValidationError } from '../../../utils/errors';
+import { getWalletBalance } from '../../../lib/stellar/wallet';
+
+const mockGetWalletBalance = getWalletBalance as ReturnType<typeof vi.fn>;
 
 const USER = 'user-123';
 const CREATOR = 'creator-123';
@@ -20,6 +35,8 @@ const mockPrisma = {
   wallet: { findFirst: vi.fn() },
   walletFlag: { findFirst: vi.fn() },
   accountFreeze: { findFirst: vi.fn() },
+  stellarAsset: { findFirst: vi.fn() },
+  webhook: { findMany: vi.fn() },
   tipMedia: { findMany: vi.fn(), updateMany: vi.fn() },
   tip: {
     create: vi.fn(),
@@ -65,6 +82,16 @@ describe('PaymentService.createTip with media', () => {
     mockPrisma.walletFlag.findFirst.mockResolvedValue(null);
     mockPrisma.accountFreeze.findFirst.mockResolvedValue(null);
     mockPrisma.tipMedia.updateMany.mockResolvedValue({ count: 1 });
+    mockPrisma.webhook.findMany.mockResolvedValue([]);
+    // #175 — default USDC asset and ample balance so media-wiring tests pass unchanged
+    mockPrisma.stellarAsset.findFirst.mockResolvedValue({
+      id: 'asset-usdc',
+      code: 'USDC',
+      issuer: 'GUSDCISSUER',
+      enabled: true,
+      priority: 100,
+    });
+    mockGetWalletBalance.mockResolvedValue({ lumens: '100', usdc: '1000' });
   });
 
   const tipRow = (media: unknown[] = []) => ({
